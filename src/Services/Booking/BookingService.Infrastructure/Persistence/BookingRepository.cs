@@ -15,15 +15,16 @@ namespace BookingService.Infrastructure.Persistence
             return db.Bookings.FirstOrDefaultAsync(b => b.Id == id, ct);
         }
 
-        public Task<bool> HasOverlapAsync(Guid resourceId, DateRange period, CancellationToken ct)
+        public async Task<IReadOnlyList<string>> FindTakenSeatsAsync(Guid showingId, IEnumerable<Seat> seats, CancellationToken ct)
         {
-            var start = period.Start;
-            var end = period.End;
-            return db.Bookings.AnyAsync(b =>
-            b.ResourceId == resourceId &&
-            b.Status != BookingStatus.Cancelled &&
-            b.Period.Start < end &&
-            start < b.Period.End, ct);
+            var labels = seats.Select(s => s.Label).ToList();
+
+            return await db.Bookings
+                .Where(b => b.ShowingId == showingId && b.Status != BookingStatus.Cancelled)
+                .SelectMany(b => b.Seats)
+                .Where(s => labels.Contains(s.Label))
+                .Select(s => s.Label)
+                .ToListAsync(ct);
         }
     }
 }

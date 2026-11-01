@@ -1,44 +1,64 @@
 namespace BookingService.Domain.Bookings;
 
-public sealed class Booking
+public sealed class Booking : AggregateRoot
 {
+    public const int MaxSeatsPerBooking = 6;
+
+    private readonly List<Seat> _seats = [];
+
     public Guid Id { get; private set; }
-    public Guid ResourceId { get; private set; }
+    public Guid ShowingId { get; private set; }
     public Guid CustomerId { get; private set; }
-    public DateRange Period { get; private set; } = null!;
+    public IReadOnlyCollection<Seat> Seats => _seats.AsReadOnly();
     public BookingStatus Status { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
 
     private Booking() {} // for EF
 
-    public static Booking Create(Guid resourceId, Guid customerId, DateRange period, DateTime nowUtc)
+    public static Booking Create(Guid showingId, Guid customerId, IEnumerable<Seat> seats, DateTime nowUtc)
     {
-        if (resourceId == Guid.Empty) throw new DomainException("ResourceId is required.");
+        if (showingId == Guid.Empty) throw new DomainException("ShowingId is required.");
         if (customerId == Guid.Empty) throw new DomainException("CustomerId is required.");
-        if (period.Start <= nowUtc) throw new DomainException("Booking must start in the future.");
 
-        return new Booking
+        var list = seats.ToList();
+        if (list.Count == 0)
+            throw new DomainException("Select at least one seat.");
+        if (list.Count > MaxSeatsPerBooking)
+            throw new DomainException($"You can book at most {MaxSeatsPerBooking} seats at once.");
+        if (list.Distinct().Count() != list.Count) // records compare by value, so "A5" == "A5"
+            throw new DomainException("The same seat was selected more than once.");
+
+        var booking = new Booking
         {
             Id = Guid.NewGuid(),
-            ResourceId = resourceId,
+            ShowingId = showingId,
             CustomerId = customerId,
-            Period = period,
             Status = BookingStatus.Pending,
             CreatedAtUtc = nowUtc
         };
+        booking._seats.AddRange(list);
+
+        booking.Raise(new BookingCreatedDomainEvent(
+            booking.Id, showingId, customerId, list.Select(s => s.Label).ToList()));
+
+        return booking;
     }
 
     public void Confirm()
     {
         if (Status != BookingStatus.Pending)
             throw new DomainException($"Cannot confirm a {Status} booking.");
+
         Status = BookingStatus.Confirmed;
+        Raise(new BookingConfirmedDomainEvent(Id));
     }
 
     public void Cancel()
     {
         if (Status == BookingStatus.Cancelled)
             throw new DomainException("Booking is already cancelled.");
+
         Status = BookingStatus.Cancelled;
+        Raise(new BookingCancelledDomainEvent(Id, ShowingId, _seats.Select(s => s.Label).ToList()));
     }
 }
